@@ -1,0 +1,7 @@
+tunnel: 1f0dcd5e-e1e6-4b52-8478-57e2f6bd4a94
+credentials-file: C:\Users\MonkeyPC\.cloudflared\1f0dcd5e-e1e6-4b52-8478-57e2f6bd4a94.json
+
+ingress:
+  - hostname: api.archilume.pro
+    service: http://localhost:3900
+  - service: http_status:404

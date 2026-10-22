@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Archilume — Admin de Licenças</title>
+<style>
+  :root {
+    --bg: #f1efea; --card: #ffffff; --border: #e8e4dd; --text: #211d18;
+    --muted: #8c857b; --accent: #a2582f; --accent2: #c17848; --danger: #c84c3f; --success: #3f8f5f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--text); font-family: "Segoe UI", -apple-system, Arial, sans-serif; }
+  .wrap { max-width: 920px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 12px rgba(0,0,0,.04); }
+  label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); font-weight: 700; margin-bottom: 6px; }
+  input, select { width: 100%; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border); background: #f6f4f0; font-size: 13px; }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
+  .field { flex: 1; min-width: 160px; }
+  button { background: linear-gradient(180deg, var(--accent2), var(--accent)); color: #fff; border: none; border-radius: 999px; padding: 10px 20px; font-weight: 700; font-size: 13px; cursor: pointer; }
+  button:hover { filter: brightness(1.05); }
+  button.secondary { background: #211d18; }
+  .result { margin-top: 14px; padding: 14px; border-radius: 12px; background: #f6f4f0; display: none; }
+  .result.show { display: block; }
+  .key-display { font-size: 18px; font-weight: 800; letter-spacing: 1px; margin: 6px 0; }
+  .copy-btn { background: #211d18; padding: 6px 14px; font-size: 11px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; color: var(--muted); text-transform: uppercase; font-size: 10px; letter-spacing: .5px; padding: 8px; border-bottom: 1px solid var(--border); }
+  td { padding: 8px; border-bottom: 1px solid var(--border); }
+  .pill { padding: 2px 9px; border-radius: 99px; font-size: 10.5px; font-weight: 700; }
+  .pill.active { background: rgba(63,143,95,.12); color: var(--success); }
+  .pill.other { background: rgba(200,76,63,.12); color: var(--danger); }
+  .err { color: var(--danger); font-size: 12.5px; margin-top: 8px; }
+  .secret-gate { max-width: 360px; margin: 80px auto; text-align: center; }
+  .row-action { background: transparent; color: var(--danger); border: 1px solid rgba(200,76,63,.3); padding: 5px 11px; font-size: 10.5px; border-radius: 999px; }
+  .row-action.reactivate { color: var(--success); border-color: rgba(63,143,95,.3); }
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <div class="secret-gate" id="gate">
+    <h1>Archilume — Admin</h1>
+    <p class="sub">Cole a chave de admin (ADMIN_SECRET do .env) pra continuar.</p>
+    <input type="password" id="secretInput" placeholder="admin secret">
+    <br><br>
+    <button onclick="saveSecret()">Entrar</button>
+    <div class="err" id="gateErr"></div>
+  </div>
+
+  <div id="main" style="display:none">
+    <h1>Archilume — Licenças</h1>
+    <div class="sub">Gere chaves pra clientes e acompanhe uso.</div>
+
+    <div class="card">
+      <div class="row">
+        <div class="field">
+          <label>Email do cliente</label>
+          <input type="email" id="email" placeholder="cliente@exemplo.com">
+        </div>
+        <div class="field">
+          <label>Plano</label>
+          <select id="plan"></select>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Notas (opcional)</label>
+          <input type="text" id="notes" placeholder="ex.: pago via pix em 14/10">
+        </div>
+      </div>
+      <button onclick="generateKey()">Gerar chave</button>
+      <div class="err" id="genErr"></div>
+      <div class="result" id="result">
+        <label>Chave gerada</label>
+        <div class="key-display" id="keyDisplay"></div>
+        <button class="copy-btn" onclick="copyKey()">Copiar</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="align-items:center; justify-content:space-between; margin-bottom:10px;">
+        <strong>Pedidos (Mercado Pago)</strong>
+        <button class="secondary" onclick="loadOrders()">Atualizar</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Email</th><th>Plano</th><th>Ciclo</th><th>Status</th><th>Chave gerada</th><th>Criado em</th>
+          </tr>
+        </thead>
+        <tbody id="ordersBody"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="row" style="align-items:center; justify-content:space-between; margin-bottom:10px;">
+        <strong>Licenças emitidas</strong>
+        <button class="secondary" onclick="loadLicenses()">Atualizar</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Chave</th><th>Email</th><th>Plano</th><th>Status</th><th>Uso</th><th>Dispositivos</th><th>Criada em</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="licensesBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+  var secret = localStorage.getItem('archilume_admin_secret') || '';
+  var plansCache = {};
+
+  function saveSecret() {
+    secret = document.getElementById('secretInput').value.trim();
+    if (!secret) return;
+    localStorage.setItem('archilume_admin_secret', secret);
+    boot();
+  }
+
+  function api(path, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign({ 'Content-Type': 'application/json', 'x-admin-secret': secret }, opts.headers || {});
+    return fetch(path, opts).then(function (r) {
+      if (!r.ok) return r.json().then(function (j) { throw new Error(j.message || 'Erro'); });
+      return r.json();
+    });
+  }
+
+  function loadPlans() {
+    return fetch('/plans').then(function (r) { return r.json(); }).then(function (plans) {
+      plansCache = plans;
+      var sel = document.getElementById('plan');
+      sel.innerHTML = Object.keys(plans).map(function (id) {
+        var p = plans[id];
+        return '<option value="' + id + '">' + p.label + ' — ' + p.rendersPerMonth + ' renders/mês</option>';
+      }).join('');
+    });
+  }
+
+  function generateKey() {
+    document.getElementById('genErr').textContent = '';
+    var email = document.getElementById('email').value.trim();
+    var plan = document.getElementById('plan').value;
+    var notes = document.getElementById('notes').value.trim();
+    if (!email) { document.getElementById('genErr').textContent = 'Preencha o email.'; return; }
+
+    api('/license/generate', { method: 'POST', body: JSON.stringify({ email: email, plan: plan, notes: notes }) })
+      .then(function (license) {
+        document.getElementById('keyDisplay').textContent = license.key;
+        document.getElementById('result').classList.add('show');
+        document.getElementById('email').value = '';
+        document.getElementById('notes').value = '';
+        loadLicenses();
+      })
+      .catch(function (e) {
+        document.getElementById('genErr').textContent = e.message;
+        if (e.message.indexOf('admin-secret') !== -1) showGate('Chave de admin incorreta.');
+      });
+  }
+
+  function copyKey() {
+    var text = document.getElementById('keyDisplay').textContent;
+    navigator.clipboard.writeText(text);
+  }
+
+  function loadLicenses() {
+    api('/admin/licenses').then(function (list) {
+      var body = document.getElementById('licensesBody');
+      body.innerHTML = list.map(function (l) {
+        var statusClass = l.status === 'active' ? 'active' : 'other';
+        var created = new Date(l.created_at + 'Z').toLocaleDateString('pt-BR');
+        var actionBtn = l.status === 'active'
+          ? '<button class="row-action" onclick="revokeKey(\'' + l.key + '\')">Revogar</button>'
+          : '<button class="row-action reactivate" onclick="reactivateKey(\'' + l.key + '\')">Reativar</button>';
+        return '<tr>' +
+          '<td><code>' + l.key + '</code></td>' +
+          '<td>' + l.email + '</td>' +
+          '<td>' + (plansCache[l.plan] ? plansCache[l.plan].label : l.plan) + '</td>' +
+          '<td><span class="pill ' + statusClass + '">' + l.status + '</span></td>' +
+          '<td>' + l.renders_used + ' / ' + l.rendersLimit + '</td>' +
+          '<td>' + l.activeDevices + '</td>' +
+          '<td>' + created + '</td>' +
+          '<td>' + actionBtn + '</td>' +
+        '</tr>';
+      }).join('') || '<tr><td colspan="8" style="color:var(--muted)">Nenhuma licença ainda.</td></tr>';
+    }).catch(function (e) {
+      if (e.message.indexOf('admin-secret') !== -1) showGate('Chave de admin incorreta.');
+    });
+  }
+
+  function revokeKey(key) {
+    if (!confirm('Revogar a chave ' + key + '? O cliente para de conseguir renderizar até você reativar.')) return;
+    api('/admin/license/' + encodeURIComponent(key) + '/revoke', { method: 'POST' }).then(loadLicenses).catch(function (e) {
+      alert(e.message);
+    });
+  }
+
+  function reactivateKey(key) {
+    api('/admin/license/' + encodeURIComponent(key) + '/reactivate', { method: 'POST' }).then(loadLicenses).catch(function (e) {
+      alert(e.message);
+    });
+  }
+
+  function loadOrders() {
+    api('/admin/orders').then(function (list) {
+      var body = document.getElementById('ordersBody');
+      body.innerHTML = list.map(function (o) {
+        var statusClass = o.status === 'paid' ? 'active' : 'other';
+        var created = new Date(o.created_at + 'Z').toLocaleString('pt-BR');
+        return '<tr>' +
+          '<td>' + o.email + '</td>' +
+          '<td>' + (plansCache[o.plan] ? plansCache[o.plan].label : o.plan) + '</td>' +
+          '<td>' + (o.cycle === 'annual' ? 'Anual' : 'Mensal') + '</td>' +
+          '<td><span class="pill ' + statusClass + '">' + o.status + '</span></td>' +
+          '<td>' + (o.license_key ? '<code>' + o.license_key + '</code>' : '—') + '</td>' +
+          '<td>' + created + '</td>' +
+        '</tr>';
+      }).join('') || '<tr><td colspan="6" style="color:var(--muted)">Nenhum pedido ainda.</td></tr>';
+    }).catch(function (e) {
+      if (e.message.indexOf('admin-secret') !== -1) showGate('Chave de admin incorreta.');
+    });
+  }
+
+  function showGate(err) {
+    document.getElementById('gate').style.display = 'block';
+    document.getElementById('main').style.display = 'none';
+    document.getElementById('gateErr').textContent = err || '';
+  }
+
+  function boot() {
+    if (!secret) { showGate(); return; }
+    document.getElementById('gate').style.display = 'none';
+    document.getElementById('main').style.display = 'block';
+    loadPlans().then(function () {
+      loadLicenses();
+      loadOrders();
+    });
+  }
+
+  boot();
+</script>
+</body>
+</html>
