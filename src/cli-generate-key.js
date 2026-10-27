@@ -20,13 +20,14 @@ if (!args.email || !args.plan) {
   process.exit(1);
 }
 
-try {
-  const license = licenses.generateLicense({ email: args.email, plan: args.plan, notes: args.notes });
-  console.log('Licenca criada:');
-  console.log(`  Chave:  ${license.key}`);
-  console.log(`  Email:  ${license.email}`);
-  console.log(`  Plano:  ${license.plan}`);
-} catch (err) {
-  console.error(`Erro: ${err.message}`);
-  process.exit(1);
-}
+licenses.generateLicense({ email: args.email, plan: args.plan, notes: args.notes })
+  .then((license) => {
+    console.log('Licenca criada:');
+    console.log(`  Chave:  ${license.key}`);
+    console.log(`  Email:  ${license.email}`);
+    console.log(`  Plano:  ${license.plan}`);
+  })
+  .catch((err) => {
+    console.error(`Erro: ${err.message}`);
+    process.exit(1);
+  });

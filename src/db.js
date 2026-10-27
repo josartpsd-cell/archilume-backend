@@ -1,14 +1,15 @@
-const path = require('path');
-const { DatabaseSync } = require('node:sqlite');
+const { createClient } = require('@libsql/client/web');
 
-// SQLite embutido no Node (22+), sem dependencia nativa pra compilar - evita
-// precisar de Visual Studio Build Tools so pra rodar o backend localmente.
-const dbPath = path.join(__dirname, '..', 'data.sqlite');
-const db = new DatabaseSync(dbPath);
-db.exec('PRAGMA journal_mode = WAL');
+// Banco no Turso (SQLite na nuvem). O disco do Render gratis e apagado a cada
+// reinicio, e o data.sqlite que ficava na pasta do servidor levava junto todas
+// as licencas - inclusive as pagas. O cliente "web" fala por HTTP, sem modulo
+// nativo para compilar.
+const url = process.env.TURSO_DATABASE_URL;
+if (!url) throw new Error('TURSO_DATABASE_URL nao configurado no .env do backend.');
+const client = createClient({ url, authToken: process.env.TURSO_AUTH_TOKEN });
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS licenses (
+const SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS licenses (
     key TEXT PRIMARY KEY,
     email TEXT NOT NULL,
     plan TEXT NOT NULL,
@@ -17,9 +18,8 @@ db.exec(`
     period_start TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     notes TEXT
-  );
-
-  CREATE TABLE IF NOT EXISTS activations (
+  )`,
+  `CREATE TABLE IF NOT EXISTS activations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     license_key TEXT NOT NULL,
     machine_id TEXT NOT NULL,
@@ -27,18 +27,16 @@ db.exec(`
     last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(license_key, machine_id),
     FOREIGN KEY (license_key) REFERENCES licenses(key)
-  );
-
-  CREATE TABLE IF NOT EXISTS render_log (
+  )`,
+  `CREATE TABLE IF NOT EXISTS render_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     license_key TEXT NOT NULL,
     machine_id TEXT,
     model TEXT,
     resolution TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS orders (
+  )`,
+  `CREATE TABLE IF NOT EXISTS orders (
     id TEXT PRIMARY KEY,
     email TEXT NOT NULL,
     plan TEXT NOT NULL,
@@ -49,7 +47,28 @@ db.exec(`
     license_key TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     paid_at TEXT
-  );
-`);
+  )`
+];
 
-module.exports = db;
+const ready = client.batch(SCHEMA, 'write');
+
+// Linhas como objeto simples ({coluna: valor}), do jeito que o node:sqlite devolvia.
+function toObjects(rs) {
+  return rs.rows.map((row) => Object.fromEntries(rs.columns.map((col, i) => [col, row[i]])));
+}
+
+async function all(sql, ...args) {
+  await ready;
+  return toObjects(await client.execute({ sql, args }));
+}
+
+async function get(sql, ...args) {
+  return (await all(sql, ...args))[0];
+}
+
+async function run(sql, ...args) {
+  await ready;
+  return client.execute({ sql, args });
+}
+
+module.exports = { all, get, run, ready, client };

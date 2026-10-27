@@ -47,6 +47,10 @@ function handleLicenseError(res, err) {
   return res.status(500).json({ error: 'internal_error', message: 'Erro interno no servidor.' });
 }
 
+// Express 4 nao repassa erro de rota async: sem isto, uma falha do banco
+// (que agora fica no Turso, pela rede) derrubaria o servidor inteiro.
+const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 app.get('/plans', (_req, res) => res.json(PLANS));
@@ -54,18 +58,18 @@ app.get('/plans', (_req, res) => res.json(PLANS));
 // --- Painel de admin: telinha no navegador pra gerar/ver licencas sem terminal ---
 app.get('/admin', (_req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
 
-app.get('/admin/licenses', requireAdmin, (_req, res) => {
-  res.json(licenses.listLicenses());
-});
+app.get('/admin/licenses', requireAdmin, ah(async (_req, res) => {
+  res.json(await licenses.listLicenses());
+}));
 
-app.get('/admin/orders', requireAdmin, (_req, res) => {
-  res.json(orders.listOrders());
-});
+app.get('/admin/orders', requireAdmin, ah(async (_req, res) => {
+  res.json(await orders.listOrders());
+}));
 
 // --- Admin: gerar chave para um cliente (uso manual, por enquanto) ---
-app.post('/license/generate', requireAdmin, (req, res) => {
+app.post('/license/generate', requireAdmin, async (req, res) => {
   try {
-    const license = licenses.generateLicense(req.body || {});
+    const license = await licenses.generateLicense(req.body || {});
     res.status(201).json(license);
   } catch (err) {
     handleLicenseError(res, err);
@@ -73,47 +77,47 @@ app.post('/license/generate', requireAdmin, (req, res) => {
 });
 
 // --- Admin: revogar/reativar uma chave (bloqueia validacao/ativacao sem apagar o historico) ---
-app.post('/admin/license/:key/revoke', requireAdmin, (req, res) => {
+app.post('/admin/license/:key/revoke', requireAdmin, async (req, res) => {
   try {
-    res.json(licenses.revokeLicense(req.params.key));
+    res.json(await licenses.revokeLicense(req.params.key));
   } catch (err) {
     handleLicenseError(res, err);
   }
 });
 
-app.post('/admin/license/:key/reactivate', requireAdmin, (req, res) => {
+app.post('/admin/license/:key/reactivate', requireAdmin, async (req, res) => {
   try {
-    res.json(licenses.reactivateLicense(req.params.key));
+    res.json(await licenses.reactivateLicense(req.params.key));
   } catch (err) {
     handleLicenseError(res, err);
   }
 });
 
 // --- Plugin: ativar a licenca nesta maquina (primeira vez que abre o painel) ---
-app.post('/license/activate', (req, res) => {
+app.post('/license/activate', async (req, res) => {
   const { key, machine_id: machineId } = req.body || {};
   if (!key || !machineId) return res.status(400).json({ error: 'missing_fields', message: 'key e machine_id sao obrigatorios.' });
   try {
-    const { license, plan } = licenses.activate(key, machineId);
+    const { license, plan } = await licenses.activate(key, machineId);
     res.json({ plan: license.plan, modules: plan.modules, rendersPerMonth: plan.rendersPerMonth });
   } catch (err) {
     handleLicenseError(res, err);
   }
 });
 
-app.post('/license/deactivate', (req, res) => {
+app.post('/license/deactivate', ah(async (req, res) => {
   const { key, machine_id: machineId } = req.body || {};
   if (!key || !machineId) return res.status(400).json({ error: 'missing_fields', message: 'key e machine_id sao obrigatorios.' });
-  licenses.deactivate(key, machineId);
+  await licenses.deactivate(key, machineId);
   res.json({ ok: true });
-});
+}));
 
 // --- Plugin: revalidar periodicamente (cache local com janela de graca) ---
-app.post('/license/validate', (req, res) => {
+app.post('/license/validate', async (req, res) => {
   const { key, machine_id: machineId } = req.body || {};
   if (!key || !machineId) return res.status(400).json({ error: 'missing_fields', message: 'key e machine_id sao obrigatorios.' });
   try {
-    const result = licenses.validate(key, machineId);
+    const result = await licenses.validate(key, machineId);
     res.json({
       plan: result.license.plan,
       modules: result.plan.modules,
@@ -137,7 +141,7 @@ app.post('/render/huggingface', async (req, res) => {
   let license;
   let plan;
   try {
-    ({ license, plan } = licenses.validate(key, machineId));
+    ({ license, plan } = await licenses.validate(key, machineId));
   } catch (err) {
     return handleLicenseError(res, err);
   }
@@ -149,7 +153,7 @@ app.post('/render/huggingface', async (req, res) => {
 
   try {
     const imageBuffer = await huggingface.generateImage({ prompt, imageBase64 });
-    const usage = licenses.consumeUsage(key, { machineId, model: 'hf-pix2pix' });
+    const usage = await licenses.consumeUsage(key, { machineId, model: 'hf-pix2pix' });
     res.set('Content-Type', 'image/png');
     res.set('X-Renders-Remaining', String(usage.rendersRemaining));
     res.send(imageBuffer);
@@ -160,29 +164,29 @@ app.post('/render/huggingface', async (req, res) => {
 });
 
 // --- Plugin: checar saldo antes de desenhar o botao de render ---
-app.post('/usage/check', (req, res) => {
+app.post('/usage/check', async (req, res) => {
   const { key } = req.body || {};
   if (!key) return res.status(400).json({ error: 'missing_fields', message: 'key e obrigatorio.' });
   try {
-    res.json(licenses.checkUsage(key));
+    res.json(await licenses.checkUsage(key));
   } catch (err) {
     handleLicenseError(res, err);
   }
 });
 
 // --- Plugin: debitar 1 render do saldo (chamar DEPOIS que o render deu certo) ---
-app.post('/usage/consume', (req, res) => {
+app.post('/usage/consume', async (req, res) => {
   const { key, machine_id: machineId, model, resolution } = req.body || {};
   if (!key) return res.status(400).json({ error: 'missing_fields', message: 'key e obrigatorio.' });
   try {
-    res.json(licenses.consumeUsage(key, { machineId, model, resolution }));
+    res.json(await licenses.consumeUsage(key, { machineId, model, resolution }));
   } catch (err) {
     handleLicenseError(res, err);
   }
 });
 
 // --- Venda: cliente escolhe plano/ciclo, a gente cria o pedido + preferencia no Mercado Pago ---
-app.post('/checkout/create', async (req, res) => {
+app.post('/checkout/create', ah(async (req, res) => {
   const { plan, cycle, email: customerEmail } = req.body || {};
   if (!customerEmail || !plan || !cycle) {
     return res.status(400).json({ error: 'missing_fields', message: 'email, plan e cycle sao obrigatorios.' });
@@ -198,7 +202,7 @@ app.post('/checkout/create', async (req, res) => {
     return res.status(400).json({ error: 'plan_not_purchasable', message: 'Este plano/ciclo nao esta disponivel para compra (use /trial/claim para o teste gratis).' });
   }
 
-  const order = orders.createOrder({ email: customerEmail, plan, cycle });
+  const order = await orders.createOrder({ email: customerEmail, plan, cycle });
 
   try {
     const preference = await mercadopago.createPreference({
@@ -207,18 +211,18 @@ app.post('/checkout/create', async (req, res) => {
       unitPriceCents,
       email: customerEmail
     });
-    orders.setPreferenceId(order.id, preference.id);
+    await orders.setPreferenceId(order.id, preference.id);
     res.status(201).json({ orderId: order.id, checkoutUrl: preference.init_point, preferenceId: preference.id });
   } catch (err) {
     console.error('[checkout/create] erro ao criar preferencia Mercado Pago:', err);
     res.status(502).json({ error: 'payment_provider_error', message: 'Nao foi possivel iniciar o pagamento agora. Tente novamente em instantes.' });
   }
-});
+}));
 
 // --- Venda: pagamento embutido no site via Payment Brick (sem redirecionar
 // pro Mercado Pago) - o Brick ja tokeniza o cartao com seguranca no
 // navegador; aqui so processamos o token contra a API deles. ---
-app.post('/checkout/process', async (req, res) => {
+app.post('/checkout/process', ah(async (req, res) => {
   const { plan, cycle, email: customerEmail, formData, orderId: existingOrderId } = req.body || {};
   if (!customerEmail || !plan || !cycle || !formData) {
     return res.status(400).json({ error: 'missing_fields', message: 'email, plan, cycle e formData sao obrigatorios.' });
@@ -239,7 +243,7 @@ app.post('/checkout/process', async (req, res) => {
   // Reaproveita o pedido criado em /checkout/create (junto com a preferencia
   // usada pra inicializar o Brick) em vez de duplicar - cai pra criar um novo
   // pedido so se por algum motivo o id nao vier ou nao existir mais.
-  const order = (existingOrderId && orders.getOrder(existingOrderId)) || orders.createOrder({ email: customerEmail, plan, cycle });
+  const order = (existingOrderId && await orders.getOrder(existingOrderId)) || await orders.createOrder({ email: customerEmail, plan, cycle });
 
   try {
     const payment = await mercadopago.processPayment({
@@ -248,19 +252,19 @@ app.post('/checkout/process', async (req, res) => {
       email: customerEmail,
       formData
     });
-    orders.setPreferenceId(order.id, String(payment.id));
+    await orders.setPreferenceId(order.id, String(payment.id));
 
     if (payment.status === 'approved' && order.status !== 'paid') {
-      const license = licenses.generateLicense({
+      const license = await licenses.generateLicense({
         email: order.email,
         plan: order.plan,
         notes: `Pedido ${order.id} via Mercado Pago Brick (pagamento ${payment.id})`
       });
-      orders.markPaid(order.id, { paymentId: payment.id, licenseKey: license.key });
+      await orders.markPaid(order.id, { paymentId: payment.id, licenseKey: license.key });
       email.sendLicenseEmail({ to: order.email, planLabel: planConfig.label, licenseKey: license.key })
         .catch((err) => console.error('[checkout/process] falha ao enviar email:', err));
     } else if (['rejected', 'cancelled'].includes(payment.status)) {
-      orders.markFailed(order.id, payment.id);
+      await orders.markFailed(order.id, payment.id);
     }
 
     res.status(201).json({
@@ -270,10 +274,10 @@ app.post('/checkout/process', async (req, res) => {
     });
   } catch (err) {
     console.error('[checkout/process] erro ao processar pagamento Mercado Pago:', err);
-    orders.markFailed(order.id, null);
+    await orders.markFailed(order.id, null).catch(() => {});
     res.status(502).json({ error: 'payment_provider_error', message: 'Nao foi possivel processar o pagamento agora. Verifique os dados do cartao e tente novamente.' });
   }
-});
+}));
 
 // --- Mercado Pago chama esta rota quando o status de um pagamento muda ---
 app.post('/webhook/mercadopago', async (req, res) => {
@@ -286,23 +290,23 @@ app.post('/webhook/mercadopago', async (req, res) => {
   try {
     const payment = await mercadopago.getPayment(paymentId);
     const orderId = payment.external_reference;
-    const order = orderId ? orders.getOrder(orderId) : null;
+    const order = orderId ? await orders.getOrder(orderId) : null;
     if (!order) return res.status(200).json({ ok: true, order_not_found: true });
 
     if (payment.status === 'approved') {
       if (order.status !== 'paid') {
         const planConfig = getPlan(order.plan);
-        const license = licenses.generateLicense({
+        const license = await licenses.generateLicense({
           email: order.email,
           plan: order.plan,
           notes: `Pedido ${order.id} via Mercado Pago (pagamento ${paymentId})`
         });
-        orders.markPaid(order.id, { paymentId, licenseKey: license.key });
+        await orders.markPaid(order.id, { paymentId, licenseKey: license.key });
         email.sendLicenseEmail({ to: order.email, planLabel: planConfig.label, licenseKey: license.key })
           .catch((err) => console.error('[webhook] falha ao enviar email:', err));
       }
     } else if (['rejected', 'cancelled'].includes(payment.status)) {
-      orders.markFailed(order.id, paymentId);
+      await orders.markFailed(order.id, paymentId);
     }
 
     res.status(200).json({ ok: true });
@@ -315,8 +319,8 @@ app.post('/webhook/mercadopago', async (req, res) => {
 });
 
 // --- Pagina de sucesso do site: pergunta "ja processou? qual a chave?" ---
-app.get('/checkout/status/:orderId', (req, res) => {
-  const order = orders.getOrder(req.params.orderId);
+app.get('/checkout/status/:orderId', ah(async (req, res) => {
+  const order = await orders.getOrder(req.params.orderId);
   if (!order) return res.status(404).json({ error: 'not_found', message: 'Pedido nao encontrado.' });
   res.json({
     status: order.status,
@@ -324,27 +328,26 @@ app.get('/checkout/status/:orderId', (req, res) => {
     cycle: order.cycle,
     licenseKey: order.status === 'paid' ? order.license_key : null
   });
-});
+}));
 
 // --- Teste gratis: gera a chave na hora, sem pagamento ---
-app.post('/trial/claim', (req, res) => {
+app.post('/trial/claim', ah(async (req, res) => {
   const { email: customerEmail } = req.body || {};
   if (!customerEmail) return res.status(400).json({ error: 'missing_fields', message: 'email e obrigatorio.' });
 
-  const already = licenses.listLicenses().find((l) => l.plan === 'trial' && l.email === customerEmail);
+  const already = (await licenses.listLicenses()).find((l) => l.plan === 'trial' && l.email === customerEmail);
   if (already) {
     return res.status(409).json({ error: 'trial_already_claimed', message: 'Este email ja recebeu uma chave de teste gratis.' });
   }
 
-  try {
-    const license = licenses.generateLicense({ email: customerEmail, plan: 'trial', notes: 'Teste gratis via site' });
-    email.sendLicenseEmail({ to: customerEmail, planLabel: PLANS.trial.label, licenseKey: license.key })
-      .catch((err) => console.error('[trial/claim] falha ao enviar email:', err));
-    res.status(201).json({ licenseKey: license.key });
-  } catch (err) {
-    handleLicenseError(res, err);
-  }
-});
+  const license = await licenses.generateLicense({ email: customerEmail, plan: 'trial', notes: 'Teste gratis via site' });
+  email.sendLicenseEmail({ to: customerEmail, planLabel: PLANS.trial.label, licenseKey: license.key })
+    .catch((err) => console.error('[trial/claim] falha ao enviar email:', err));
+  res.status(201).json({ licenseKey: license.key });
+}));
+
+// Erros que escaparam das rotas (inclusive do banco): responde em vez de cair.
+app.use((err, _req, res, _next) => handleLicenseError(res, err));
 
 app.listen(PORT, () => {
   console.log(`Archilume backend rodando em http://localhost:${PORT}`);
