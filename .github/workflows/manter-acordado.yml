@@ -1,0 +1,18 @@
+name: Manter servidor acordado
+
+# O Render gratis dorme depois de 15 min sem acesso e leva de 30 a 75 s para
+# acordar; o plugin do cliente desistia antes e mostrava "nao foi possivel
+# falar com o servidor de licenca". Chamar o /health a cada 10 min evita isso.
+# Atencao: o GitHub desliga agendamentos de repositorio sem commit ha 60 dias.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Chamar /health
+        run: curl -fsS -m 120 -o /dev/null -w "HTTP %{http_code} em %{time_total}s\n" https://api.archilume.pro/health
