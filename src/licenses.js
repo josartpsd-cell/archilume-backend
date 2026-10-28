@@ -88,9 +88,10 @@ async function activate(key, machineId) {
   const alreadyActivatedHere = existing.some((a) => a.machine_id === machineId);
 
   if (!alreadyActivatedHere && existing.length >= plan.activationsLimit) {
+    const limite = plan.activationsLimit === 1 ? '1 computador' : `${plan.activationsLimit} computadores`;
     throw new LicenseError(
       'activation_limit',
-      `Limite de ${plan.activationsLimit} ativacao(oes) simultaneas atingido para este plano.`
+      `Esta chave ja esta ativada em outro computador (o plano ${plan.label} permite ${limite}). Fale com o suporte para liberar.`
     );
   }
 
@@ -112,8 +113,11 @@ async function validate(key, machineId) {
   if (!license) throw new LicenseError('not_found', 'Chave de licenca invalida.');
   if (license.status !== 'active') throw new LicenseError('inactive', `Licenca ${license.status}.`);
 
+  // O plugin so ativa ao clicar em Salvar nas configuracoes; quem reabria o
+  // painel com a chave ja salva via "maquina nao ativada". Se ainda houver
+  // vaga no plano, ativa aqui mesmo; se nao houver, activate() explica o limite.
   const isActivatedHere = (await activations(key)).some((a) => a.machine_id === machineId);
-  if (!isActivatedHere) throw new LicenseError('not_activated', 'Esta maquina nao esta ativada para esta licenca.');
+  if (!isActivatedHere) await activate(key, machineId);
 
   await db.run("UPDATE activations SET last_seen_at = datetime('now') WHERE license_key = ? AND machine_id = ?", key, machineId);
 
@@ -173,6 +177,15 @@ async function setStatus(key, status) {
   return getLicense(key);
 }
 
+// Libera as vagas de computador da chave (cliente trocou de PC, ou a chave foi
+// testada em outra maquina). O proximo computador que abrir o plugin ativa sozinho.
+async function releaseMachines(key) {
+  const license = await getLicense(key);
+  if (!license) throw new LicenseError('not_found', 'Chave de licenca invalida.');
+  await db.run('DELETE FROM activations WHERE license_key = ?', key);
+  return license;
+}
+
 function revokeLicense(key) {
   return setStatus(key, 'revoked');
 }
@@ -193,5 +206,6 @@ module.exports = {
   consumeUsage,
   activations,
   revokeLicense,
-  reactivateLicense
+  reactivateLicense,
+  releaseMachines
 };

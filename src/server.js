@@ -93,6 +93,14 @@ app.post('/admin/license/:key/reactivate', requireAdmin, async (req, res) => {
   }
 });
 
+app.post('/admin/license/:key/release-machines', requireAdmin, async (req, res) => {
+  try {
+    res.json(await licenses.releaseMachines(req.params.key));
+  } catch (err) {
+    handleLicenseError(res, err);
+  }
+});
+
 // --- Plugin: ativar a licenca nesta maquina (primeira vez que abre o painel) ---
 app.post('/license/activate', async (req, res) => {
   const { key, machine_id: machineId } = req.body || {};
